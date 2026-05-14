@@ -38,8 +38,8 @@ function agentflowDevProxy(env: Record<string, string>): Plugin {
         }
 
         try {
-          const baseUrl = env.AGENTFLOW_API_BASE_URL;
-          const apiKey = env.AGENTFLOW_API_KEY;
+          const baseUrl = env.AGENTFLOW_API_BASE_URL || env.VITE_AGENTFLOW_API_BASE_URL;
+          const apiKey = env.AGENTFLOW_API_KEY || env.VITE_AGENTFLOW_API_KEY;
           const body = await readJsonBody(req);
           const query = typeof body.query === "string" ? body.query.trim() : "";
 

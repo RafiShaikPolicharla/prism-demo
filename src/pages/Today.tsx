@@ -11,6 +11,7 @@ import {
   type TodayFilters,
 } from '@/services';
 import { getHouseholdCountByTheme } from '@/services/households';
+import { todayAgentflowService } from '@/services/todayAgentflow';
 import { usePersona } from '@/stores/personaStore';
 import { PersonaSwitcher } from '@/components/today/PersonaSwitcher';
 import { ActionCard } from '@/components/today/ActionCard';
@@ -19,8 +20,8 @@ import { TopNav } from '@/components/TopNav';
 import { Button } from '@/components/ui/button';
 import { contentService } from '@/services';
 import { cn } from '@/lib/utils';
-import { X } from 'lucide-react';
-import type { DemoHousehold } from '@/types/demo';
+import { Loader2, X } from 'lucide-react';
+import type { DemoAction, DemoHousehold } from '@/types/demo';
 
 function greetingFor(date = new Date()) {
   const h = date.getHours();
@@ -52,6 +53,9 @@ export default function Today() {
   const persona = personasService.get(personaId);
   const themes = useMemo(() => contentService.themes(), []);
   const [households, setHouseholds] = useState<Map<string, DemoHousehold>>(new Map());
+  const [agentActions, setAgentActions] = useState<DemoAction[] | null>(null);
+  const [agentActionsLoading, setAgentActionsLoading] = useState(false);
+  const [agentActionsError, setAgentActionsError] = useState<string | null>(null);
 
   // Filters now live in PersonaProvider so they survive Today → drill-down →
   // Today round-trips. PersonaProvider resets them on persona switch.
@@ -66,6 +70,37 @@ export default function Today() {
     });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    setAgentActions(null);
+    setAgentActionsError(null);
+
+    setAgentActionsLoading(true);
+    todayAgentflowService
+      .listTodayActions()
+      .then((actions) => {
+        if (!alive) return;
+        if (actions.length > 0) {
+          setAgentActions(actions);
+        } else {
+          setAgentActionsError('No Agentflow Today recommendations returned');
+          setAgentActions(null);
+        }
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setAgentActionsError(error instanceof Error ? error.message : 'Agentflow Today request failed');
+        setAgentActions(null);
+      })
+      .finally(() => {
+        if (alive) setAgentActionsLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [personaId]);
 
   const metaByHouseholdId = useMemo(() => {
     const m = new Map<string, HouseholdMeta>();
@@ -215,14 +250,24 @@ export default function Today() {
     clientSegmentId: filters.clientSegmentId,
     wealthSegmentId: filters.wealthSegmentId,
   };
+  const waitingForAgentActions = agentActionsLoading;
+  const useAgentActions = agentActions !== null;
 
   const baseActions = useMemo(
-    () => opportunitiesService.listForPersonaToday(personaId),
-    [personaId],
+    () => {
+      if (waitingForAgentActions) return [];
+      if (useAgentActions) return agentActions;
+      return opportunitiesService.listForPersonaToday(personaId);
+    },
+    [personaId, agentActions, waitingForAgentActions, useAgentActions],
   );
   const filteredByService = useMemo(
-    () => opportunitiesService.listForPersonaToday(personaId, todayFilters, metaByHouseholdId),
-    [personaId, filters, metaByHouseholdId],
+    () => {
+      if (waitingForAgentActions) return [];
+      if (useAgentActions) return agentActions;
+      return opportunitiesService.listForPersonaToday(personaId, todayFilters, metaByHouseholdId);
+    },
+    [personaId, filters, metaByHouseholdId, agentActions, waitingForAgentActions, useAgentActions],
   );
   const actions = useMemo(
     () =>
@@ -359,6 +404,21 @@ export default function Today() {
               <h2 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80">
                 Today's Priorities
               </h2>
+              {agentActionsLoading && (
+                <span className="text-[11px] text-muted-foreground">
+                  Loading Agentflow recommendations...
+                </span>
+              )}
+              {!agentActionsLoading && agentActions && (
+                <span className="text-[11px] text-[hsl(var(--accent-blue))]">
+                  Agentflow recommendations
+                </span>
+              )}
+              {!agentActionsLoading && agentActionsError && (
+                <span className="text-[11px] text-muted-foreground">
+                  Agentflow unavailable, showing demo priorities
+                </span>
+              )}
             </div>
 
             {activeChips.length > 0 && (
@@ -389,11 +449,47 @@ export default function Today() {
             )}
 
             <div className="space-y-3">
-              {actions.map((a) => (
+              {agentActionsLoading && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 rounded-md border border-[hsl(var(--accent-blue)/0.25)] bg-[hsl(var(--accent-blue)/0.05)] px-4 py-3 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin text-[hsl(var(--accent-blue))]" />
+                    Retrieving Today recommendations from Agentflow...
+                  </div>
+                  {[0, 1, 2].map((i) => (
+                    <div
+                      key={i}
+                      className="relative overflow-hidden rounded-lg border border-border bg-card p-5"
+                    >
+                      <div className="absolute inset-y-0 left-0 w-1 bg-[hsl(var(--accent-blue)/0.5)]" />
+                      <div className="pl-1 animate-pulse space-y-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="space-y-3 flex-1">
+                            <div className="flex gap-2">
+                              <div className="h-5 w-20 rounded-full bg-muted" />
+                              <div className="h-5 w-28 rounded-full bg-muted" />
+                            </div>
+                            <div className="h-5 w-44 rounded bg-muted" />
+                            <div className="h-4 w-32 rounded bg-muted/80" />
+                          </div>
+                          <div className="space-y-2">
+                            <div className="h-3 w-24 rounded bg-muted/80" />
+                            <div className="h-5 w-20 rounded bg-muted" />
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <div className="h-4 w-full rounded bg-muted/80" />
+                          <div className="h-4 w-5/6 rounded bg-muted/70" />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!agentActionsLoading && actions.map((a) => (
                 <ActionCard
                   key={a.id}
                   action={a}
-                  householdName={households.get(a.householdId)?.name ?? a.householdId}
+                  householdName={households.get(a.householdId)?.name ?? `${a.clientName} household`}
                   tier={households.get(a.householdId)?.salesforceTier}
                   onActionTaken={incrementCompleted}
                 />
