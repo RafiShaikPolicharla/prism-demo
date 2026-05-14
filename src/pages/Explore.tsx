@@ -16,6 +16,7 @@ import {
   useStrategyListsStore,
 } from '@/services';
 import type { StrategyList } from '@/services';
+import { askAgentflow, type AgentflowAskMeta } from '@/services/agentflow';
 import { usePersona } from '@/stores/personaStore';
 import { TopNav } from '@/components/TopNav';
 import { Button } from '@/components/ui/button';
@@ -425,6 +426,10 @@ export default function Explore() {
   // Ask Prism
   const [askInput, setAskInput] = useState('');
   const [askMatch, setAskMatch] = useState<AskPrismQuestion | null>(null);
+  const [askQuestion, setAskQuestion] = useState('');
+  const [askAgentflowText, setAskAgentflowText] = useState('');
+  const [askAgentflowMeta, setAskAgentflowMeta] = useState<AgentflowAskMeta | null>(null);
+  const [askAgentflowError, setAskAgentflowError] = useState<string | null>(null);
   const [askMeta, setAskMeta] = useState<{
     fromCache: boolean;
     responseTime: number;
@@ -739,50 +744,86 @@ export default function Explore() {
     setVisibleColumns((vc) => (vc.includes(key) ? vc.filter((k) => k !== key) : [...vc, key]));
   };
 
-  // Ask Prism — checks cache first, simulates LLM latency on miss.
-  const submitAsk = (text?: string) => {
+  // Ask Prism — creates a fresh Agentflow session per question, then streams
+  // the response through the Vercel API proxy. The old demo matcher remains as
+  // a fallback when the API is unavailable.
+  const submitAsk = async (text?: string) => {
     const q = (text ?? askInput).trim();
     if (!q) return;
 
-    // 1. Cache lookup
-    const cached = servicesCache.get(q);
-    if (cached) {
-      const responseTime = 12 + Math.floor(Math.random() * 34); // 12–45ms
-      // Find the matching question shape (response is what we stored).
-      const match = askPrismService.match(q);
-      if (match) {
-        setAskMatch(match);
-        setAskFallback(false);
-        setAskMeta({ fromCache: true, responseTime, hitCount: cached.hitCount });
-      }
-      return;
-    }
-
-    // 2. Miss — simulate generation
-    const match = askPrismService.match(q);
-    if (!match) {
-      setAskMatch(null);
-      setAskMeta(null);
-      setAskFallback(true);
-      return;
-    }
+    const startedAt = performance.now();
+    setAskQuestion(q);
     setAskLoading(true);
     setAskMatch(null);
     setAskFallback(false);
     setAskMeta(null);
-    window.setTimeout(() => {
-      const responseTime = 1100 + Math.floor(Math.random() * 700); // 1100–1800ms
-      servicesCache.set(q, match.response);
+    setAskAgentflowText('');
+    setAskAgentflowMeta(null);
+    setAskAgentflowError(null);
+
+    try {
+      const result = await askAgentflow(q, {
+        onText: setAskAgentflowText,
+        onMeta: setAskAgentflowMeta,
+      });
+
+      if (!result.text.trim()) {
+        throw new Error('Agentflow returned an empty response');
+      }
+
+      setAskAgentflowMeta({
+        sessionId: result.sessionId,
+        requestId: result.requestId,
+      });
+      setAskMeta({
+        fromCache: false,
+        responseTime: Math.max(1, Math.round(performance.now() - startedAt)),
+        hitCount: 1,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Agentflow request failed';
+      setAskAgentflowError(message);
+
+      const cached = servicesCache.get(q);
+      if (cached) {
+        const match = askPrismService.match(q);
+        if (match) {
+          setAskMatch(match);
+          setAskFallback(false);
+          setAskMeta({ fromCache: true, responseTime: 12, hitCount: cached.hitCount });
+        }
+        return;
+      }
+
+      const match = askPrismService.match(q);
+      if (match) {
+        servicesCache.set(q, match.response);
+        setAskMatch(match);
+        setAskFallback(false);
+        setAskMeta({
+          fromCache: false,
+          responseTime: Math.max(1, Math.round(performance.now() - startedAt)),
+          hitCount: 1,
+        });
+        return;
+      }
+
+      setAskMatch(null);
+      setAskMeta(null);
+      setAskFallback(true);
+    } finally {
       setAskLoading(false);
-      setAskMatch(match);
-      setAskMeta({ fromCache: false, responseTime, hitCount: 1 });
-    }, 1500);
+    }
   };
 
   const dismissAsk = () => {
     setAskMatch(null);
     setAskFallback(false);
     setAskInput('');
+    setAskQuestion('');
+    setAskAgentflowText('');
+    setAskAgentflowMeta(null);
+    setAskAgentflowError(null);
     setAskMeta(null);
     setAskLoading(false);
   };
@@ -1103,11 +1144,23 @@ export default function Explore() {
               {askLoading && (
                 <div className="mt-3 rounded-lg border border-[hsl(var(--accent-blue)/0.3)] bg-[hsl(var(--accent-blue)/0.05)] p-4 shadow-sm flex items-center gap-3 animate-pulse">
                   <Sparkles className="h-4 w-4 text-[hsl(var(--accent-blue))]" />
-                  <span className="text-sm text-muted-foreground">Generating response…</span>
+                  <span className="text-sm text-muted-foreground">
+                    {askAgentflowText ? 'Streaming Agentflow response...' : 'Creating Agentflow session...'}
+                  </span>
                 </div>
               )}
 
               {/* Response card */}
+              {askAgentflowText && (
+                <AgentflowAskCard
+                  question={askQuestion}
+                  answer={askAgentflowText}
+                  meta={askMeta}
+                  agentflowMeta={askAgentflowMeta}
+                  warning={askAgentflowError}
+                  onDismiss={dismissAsk}
+                />
+              )}
               {askMatch && !askLoading && (
                 <AskPrismCard
                   question={askMatch}
@@ -1555,6 +1608,198 @@ export default function Explore() {
 }
 
 // =================== Ask Prism cards ===================
+
+function cleanAgentflowAnswer(answer: string): string {
+  const trimmed = answer.trim();
+  const match = trimmed.match(/^\{\s*['"]response['"]\s*:\s*(['"])([\s\S]*)\1\s*\}$/);
+  if (!match) return trimmed;
+
+  return match[2]
+    .replace(/\\n/g, '\n')
+    .replace(/\\'/g, "'")
+    .replace(/\\"/g, '"')
+    .trim();
+}
+
+function renderAgentflowMarkdown(text: string) {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return (
+        <strong key={index} className="font-semibold text-foreground">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+
+    return <span key={index}>{part}</span>;
+  });
+}
+
+function parseAgentflowAnswer(answer: string): {
+  summary: string;
+  topResults: Array<string | { name?: string; value?: string | number; ages?: string; note?: string }>;
+  remainder: string[];
+} {
+  const cleaned = cleanAgentflowAnswer(answer);
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as {
+        summary?: unknown;
+        topResults?: unknown;
+      };
+
+      return {
+        summary: typeof record.summary === 'string' ? record.summary : '',
+        topResults: Array.isArray(record.topResults) ? record.topResults : [],
+        remainder: [],
+      };
+    }
+  } catch {
+    // Fall through to markdown-ish parsing.
+  }
+
+  const lines = cleaned
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const topResultsIndex = lines.findIndex((line) =>
+    line.replace(/\*/g, '').toLowerCase().startsWith('top results:'),
+  );
+
+  const summaryLines = (topResultsIndex >= 0 ? lines.slice(0, topResultsIndex) : lines)
+    .map((line) => line.replace(/^\*\*Summary:\*\*\s*/i, '').trim())
+    .filter(Boolean);
+  const afterTopResults = topResultsIndex >= 0 ? lines.slice(topResultsIndex + 1) : [];
+  const topResults = afterTopResults
+    .filter((line) => line.startsWith('- '))
+    .map((line) => line.replace(/^- /, '').trim());
+  const remainder = afterTopResults.filter((line) => !line.startsWith('- '));
+
+  return {
+    summary: summaryLines.join(' '),
+    topResults,
+    remainder,
+  };
+}
+
+function renderAgentflowTopResult(
+  row: string | { name?: string; value?: string | number; ages?: string; note?: string },
+  index: number,
+) {
+  if (typeof row === 'string') {
+    return (
+      <div key={index} className="px-3 py-2 text-sm text-foreground leading-relaxed">
+        {renderAgentflowMarkdown(row)}
+      </div>
+    );
+  }
+
+  return (
+    <div key={index} className="px-3 py-2 flex items-center justify-between gap-3 text-sm">
+      <div className="font-medium text-foreground">{row.name ?? 'Household'}</div>
+      {row.ages && (
+        <div className="text-xs text-muted-foreground tabular-nums">{row.ages}</div>
+      )}
+      {row.value != null && (
+        <div className="text-xs tabular-nums text-foreground font-medium">{row.value}</div>
+      )}
+      {row.note && (
+        <div className="text-xs text-muted-foreground flex-1 text-right truncate">{row.note}</div>
+      )}
+    </div>
+  );
+}
+
+function AgentflowAskCard({
+  question,
+  answer,
+  meta,
+  agentflowMeta,
+  warning,
+  onDismiss,
+}: {
+  question: string;
+  answer: string;
+  meta: { fromCache: boolean; responseTime: number; hitCount: number } | null;
+  agentflowMeta: AgentflowAskMeta | null;
+  warning: string | null;
+  onDismiss: () => void;
+}) {
+  const formatted = parseAgentflowAnswer(answer);
+
+  return (
+    <div className="mt-3 rounded-lg border border-[hsl(var(--accent-blue)/0.3)] bg-[hsl(var(--accent-blue)/0.05)] p-4 shadow-sm relative animate-in fade-in slide-in-from-top-2 duration-300">
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="absolute top-2.5 right-2.5 text-muted-foreground hover:text-foreground p-1"
+        aria-label="Dismiss"
+      >
+        <X className="h-4 w-4" />
+      </button>
+      <div className="flex items-start gap-2 pr-6">
+        <Sparkles className="h-4 w-4 text-[hsl(var(--accent-blue))] mt-0.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          {question && (
+            <div className="mb-2 text-xs font-medium text-muted-foreground">
+              {question}
+            </div>
+          )}
+          {formatted.summary && (
+            <p className="text-sm text-foreground leading-relaxed">
+              {renderAgentflowMarkdown(formatted.summary)}
+            </p>
+          )}
+        </div>
+      </div>
+      {formatted.topResults.length > 0 && (
+        <div className="mt-3 ml-6">
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">
+            Top results
+          </div>
+          <div className="rounded-md border border-border bg-background/60 divide-y divide-border">
+            {formatted.topResults.map((row, i) => (
+              renderAgentflowTopResult(row, i)
+            ))}
+          </div>
+        </div>
+      )}
+      {formatted.remainder.length > 0 && (
+        <div className="mt-3 ml-6 space-y-1 text-sm text-muted-foreground">
+          {formatted.remainder.map((line, i) => (
+            <p key={i}>{renderAgentflowMarkdown(line)}</p>
+          ))}
+        </div>
+      )}
+      <div className="mt-3 ml-6 flex gap-2 flex-wrap items-center text-[12px] text-muted-foreground">
+        {agentflowMeta?.sessionId && (
+          <span className="rounded-full border border-border bg-background/60 px-2 py-0.5">
+            Session {agentflowMeta.sessionId.slice(0, 8)}
+          </span>
+        )}
+        {agentflowMeta?.requestId && (
+          <span className="rounded-full border border-border bg-background/60 px-2 py-0.5">
+            Request {agentflowMeta.requestId.slice(0, 8)}
+          </span>
+        )}
+        {warning && (
+          <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-200">
+            {warning}
+          </span>
+        )}
+        {meta && (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-[#78350F] px-2 py-0.5 font-medium text-[#FED7AA]">
+            <Sparkles className="h-3 w-3" />
+            Agentflow · {meta.responseTime}ms
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function AskPrismCard({
   question,

@@ -76,15 +76,24 @@ function resolveTemplateKey(action: DemoAction, householdTags: string[] = []): s
   return null;
 }
 
+const agentActions = new Map<string, DemoAction>();
+
+export function registerAgentActions(actions: DemoAction[]): void {
+  agentActions.clear();
+  for (const action of actions) {
+    agentActions.set(action.id, action);
+  }
+}
+
 export const opportunitiesService = {
   list(): DemoAction[] {
     if (!DEMO_MODE) throw new Error('opportunitiesService.list: live mode not implemented');
-    return Object.values(ACTIONS);
+    return [...Object.values(ACTIONS), ...agentActions.values()];
   },
 
   get(id: string): DemoAction | null {
     if (!DEMO_MODE) throw new Error('opportunitiesService.get: live mode not implemented');
-    return ACTIONS[id] ?? null;
+    return agentActions.get(id) ?? ACTIONS[id] ?? null;
   },
 
   /** Today queue for a given persona — uses the persona's curated todayActionIds. */
@@ -134,7 +143,7 @@ export const opportunitiesService = {
 
   listForHousehold(householdId: string): DemoAction[] {
     if (!DEMO_MODE) throw new Error('opportunitiesService.listForHousehold: live mode not implemented');
-    return Object.values(ACTIONS).filter(a => a.householdId === householdId);
+    return [...Object.values(ACTIONS), ...agentActions.values()].filter(a => a.householdId === householdId);
   },
 
   /**

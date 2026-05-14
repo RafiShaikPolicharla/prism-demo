@@ -115,6 +115,38 @@ export default function Opportunity() {
       setPotentials([]);
       return;
     }
+    if (action.householdId.startsWith('agent_household_')) {
+      setHousehold({
+        id: action.householdId,
+        name: `${action.clientName} household`,
+        primaryContact: action.clientName,
+        members: [
+          {
+            name: action.clientName,
+            age: action.clientAge ?? 0,
+            segment: action.category,
+            role: 'Primary client',
+          },
+        ],
+        hhValue: 0,
+        investableAssets: 0,
+        policies: 0,
+        activeTriggers: 1,
+        triggerLabels: [action.trigger],
+        wealthSegment: 'Agentflow recommendation',
+        primaryWealthSegment: 'Develop',
+        assetSegment: action.estimatedValue,
+        lastContact: '',
+        tags: [],
+        products: ['Agentflow recommendation'],
+        notes: action.whyItFired,
+        salesforceTier: 'B',
+      });
+      setPotentials([]);
+      return () => {
+        alive = false;
+      };
+    }
     householdsService.get(action.householdId).then((hh) => {
       if (alive) setHousehold(hh);
     });
