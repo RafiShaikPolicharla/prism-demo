@@ -1,0 +1,38 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { Toaster as Sonner } from "@/components/ui/sonner";
+import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { PersonaProvider } from "@/stores/personaStore";
+import Index from "./pages/Index.tsx";
+import Opportunity from "./pages/Opportunity.tsx";
+import Explore from "./pages/Explore.tsx";
+import Overview from "./pages/Overview.tsx";
+import Household from "./pages/Household.tsx";
+import NotFound from "./pages/NotFound.tsx";
+
+const queryClient = new QueryClient();
+
+const App = () => (
+  <QueryClientProvider client={queryClient}>
+    <TooltipProvider>
+      <Toaster />
+      <Sonner />
+      <BrowserRouter>
+        <PersonaProvider>
+          <Routes>
+            <Route path="/" element={<Index />} />
+            <Route path="/overview" element={<Overview />} />
+            <Route path="/explore" element={<Explore />} />
+            <Route path="/opportunity/:actionId" element={<Opportunity />} />
+            <Route path="/household/:householdId" element={<Household />} />
+            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </PersonaProvider>
+      </BrowserRouter>
+    </TooltipProvider>
+  </QueryClientProvider>
+);
+
+export default App;

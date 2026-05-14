@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* Prism dark mode (single theme) */
+    --background: 225 43% 7%;          /* #0A0E1A page */
+    --foreground: 210 17% 98%;         /* #F9FAFB text primary */
+
+    --card: 220 26% 11%;               /* #111827 panel */
+    --card-foreground: 210 17% 98%;
+
+    --popover: 217 19% 17%;            /* #1F2937 raised */
+    --popover-foreground: 210 17% 98%;
+
+    --primary: 43 81% 46%;             /* #D4A017 gold accent */
+    --primary-foreground: 225 43% 7%;  /* dark text on gold */
+
+    --accent-blue: 213 94% 68%;        /* #60A5FA */
+    --urgency-act-now: 0 84% 60%;      /* #EF4444 */
+    --urgency-this-quarter: 38 92% 50%;/* #F59E0B */
+    --urgency-monitor: 213 94% 68%;    /* #60A5FA */
+
+    --secondary: 217 19% 17%;          /* #1F2937 */
+    --secondary-foreground: 216 12% 84%;
+
+    --muted: 217 19% 17%;              /* #1F2937 */
+    --muted-foreground: 218 11% 65%;   /* #9CA3AF */
+
+    --accent: 217 19% 17%;             /* #1F2937 */
+    --accent-foreground: 210 17% 98%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 17% 98%;
+
+    --border: 217 19% 27%;             /* #374151 stronger divider */
+    --input: 217 19% 27%;
+    --ring: 213 94% 68%;               /* #60A5FA focus */
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 225 43% 7%;
+    --sidebar-foreground: 216 12% 84%;
+    --sidebar-primary: 43 81% 46%;
+    --sidebar-primary-foreground: 225 43% 7%;
+    --sidebar-accent: 217 19% 17%;
+    --sidebar-accent-foreground: 210 17% 98%;
+    --sidebar-border: 217 19% 27%;
+    --sidebar-ring: 213 94% 68%;
+  }
+
+  .dark {
+    /* Same as :root — app is dark by default */
+    --background: 225 43% 7%;
+    --foreground: 210 17% 98%;
+    --card: 220 26% 11%;
+    --card-foreground: 210 17% 98%;
+    --popover: 217 19% 17%;
+    --popover-foreground: 210 17% 98%;
+    --primary: 43 81% 46%;
+    --primary-foreground: 225 43% 7%;
+    --secondary: 217 19% 17%;
+    --secondary-foreground: 216 12% 84%;
+    --muted: 217 19% 17%;
+    --muted-foreground: 218 11% 65%;
+    --accent: 217 19% 17%;
+    --accent-foreground: 210 17% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 17% 98%;
+    --border: 217 19% 27%;
+    --input: 217 19% 27%;
+    --ring: 213 94% 68%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
