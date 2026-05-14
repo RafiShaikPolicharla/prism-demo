@@ -49,14 +49,23 @@ function parseSseEvent(raw: string): unknown | null {
   }
 }
 
+function readMeta(
+  parsed: Record<string, unknown>,
+  onMeta?: (meta: AgentflowAskMeta) => void,
+): AgentflowAskMeta {
+  const meta: AgentflowAskMeta = {};
+  if (typeof parsed.session_id === 'string') meta.sessionId = parsed.session_id;
+  if (typeof parsed.request_id === 'string') meta.requestId = parsed.request_id;
+  if (meta.sessionId || meta.requestId) onMeta?.(meta);
+  return meta;
+}
+
 function readEvent(
   raw: string,
-  currentText: string,
-  onText: (text: string) => void,
   onMeta?: (meta: AgentflowAskMeta) => void,
-): string {
+): { text: string; isLastNode: boolean; meta: AgentflowAskMeta } | null {
   const parsed = parseSseEvent(raw);
-  if (!parsed || typeof parsed !== 'object') return currentText;
+  if (!parsed || typeof parsed !== 'object') return null;
 
   const event = parsed as Record<string, unknown>;
 
@@ -64,17 +73,21 @@ function readEvent(
     throw new Error(event.error);
   }
 
-  const meta: AgentflowAskMeta = {};
-  if (typeof event.session_id === 'string') meta.sessionId = event.session_id;
-  if (typeof event.request_id === 'string') meta.requestId = event.request_id;
-  if (meta.sessionId || meta.requestId) onMeta?.(meta);
-
+  const meta = readMeta(event, onMeta);
   const parts = extractText(event.response);
-  if (parts.length === 0) return currentText;
+  if (parts.length === 0) {
+    return {
+      text: '',
+      isLastNode: event.last_node === true,
+      meta,
+    };
+  }
 
-  const nextText = [...(currentText ? [currentText] : []), ...parts].join('\n\n');
-  onText(nextText);
-  return nextText;
+  return {
+    text: parts[parts.length - 1],
+    isLastNode: event.last_node === true,
+    meta,
+  };
 }
 
 export async function askAgentflow(
@@ -99,6 +112,7 @@ export async function askAgentflow(
   const decoder = new TextDecoder();
   let buffer = '';
   let text = '';
+  let lastNodeText = '';
   const meta: AgentflowAskMeta = {};
 
   while (true) {
@@ -109,21 +123,27 @@ export async function askAgentflow(
     buffer = events.pop() ?? '';
 
     for (const event of events) {
-      text = readEvent(event, text, options.onText, (next) => {
+      const parsedEvent = readEvent(event, (next) => {
         Object.assign(meta, next);
         options.onMeta?.({ ...meta });
       });
+      if (parsedEvent?.text) text = parsedEvent.text;
+      if (parsedEvent?.isLastNode && parsedEvent.text) lastNodeText = parsedEvent.text;
     }
 
     if (done) break;
   }
 
   if (buffer.trim()) {
-    text = readEvent(buffer, text, options.onText, (next) => {
+    const parsedEvent = readEvent(buffer, (next) => {
       Object.assign(meta, next);
       options.onMeta?.({ ...meta });
     });
+    if (parsedEvent?.text) text = parsedEvent.text;
+    if (parsedEvent?.isLastNode && parsedEvent.text) lastNodeText = parsedEvent.text;
   }
 
+  text = lastNodeText || text;
+  if (text) options.onText(text);
   return { text, ...meta };
 }

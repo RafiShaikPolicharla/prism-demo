@@ -1609,6 +1609,110 @@ export default function Explore() {
 
 // =================== Ask Prism cards ===================
 
+function cleanAgentflowAnswer(answer: string): string {
+  const trimmed = answer.trim();
+  const match = trimmed.match(/^\{\s*['"]response['"]\s*:\s*(['"])([\s\S]*)\1\s*\}$/);
+  if (!match) return trimmed;
+
+  return match[2]
+    .replace(/\\n/g, '\n')
+    .replace(/\\'/g, "'")
+    .replace(/\\"/g, '"')
+    .trim();
+}
+
+function renderAgentflowMarkdown(text: string) {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return (
+        <strong key={index} className="font-semibold text-foreground">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+
+    return <span key={index}>{part}</span>;
+  });
+}
+
+function parseAgentflowAnswer(answer: string): {
+  summary: string;
+  topResults: Array<string | { name?: string; value?: string | number; ages?: string; note?: string }>;
+  remainder: string[];
+} {
+  const cleaned = cleanAgentflowAnswer(answer);
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as {
+        summary?: unknown;
+        topResults?: unknown;
+      };
+
+      return {
+        summary: typeof record.summary === 'string' ? record.summary : '',
+        topResults: Array.isArray(record.topResults) ? record.topResults : [],
+        remainder: [],
+      };
+    }
+  } catch {
+    // Fall through to markdown-ish parsing.
+  }
+
+  const lines = cleaned
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const topResultsIndex = lines.findIndex((line) =>
+    line.replace(/\*/g, '').toLowerCase().startsWith('top results:'),
+  );
+
+  const summaryLines = (topResultsIndex >= 0 ? lines.slice(0, topResultsIndex) : lines)
+    .map((line) => line.replace(/^\*\*Summary:\*\*\s*/i, '').trim())
+    .filter(Boolean);
+  const afterTopResults = topResultsIndex >= 0 ? lines.slice(topResultsIndex + 1) : [];
+  const topResults = afterTopResults
+    .filter((line) => line.startsWith('- '))
+    .map((line) => line.replace(/^- /, '').trim());
+  const remainder = afterTopResults.filter((line) => !line.startsWith('- '));
+
+  return {
+    summary: summaryLines.join(' '),
+    topResults,
+    remainder,
+  };
+}
+
+function renderAgentflowTopResult(
+  row: string | { name?: string; value?: string | number; ages?: string; note?: string },
+  index: number,
+) {
+  if (typeof row === 'string') {
+    return (
+      <div key={index} className="px-3 py-2 text-sm text-foreground leading-relaxed">
+        {renderAgentflowMarkdown(row)}
+      </div>
+    );
+  }
+
+  return (
+    <div key={index} className="px-3 py-2 flex items-center justify-between gap-3 text-sm">
+      <div className="font-medium text-foreground">{row.name ?? 'Household'}</div>
+      {row.ages && (
+        <div className="text-xs text-muted-foreground tabular-nums">{row.ages}</div>
+      )}
+      {row.value != null && (
+        <div className="text-xs tabular-nums text-foreground font-medium">{row.value}</div>
+      )}
+      {row.note && (
+        <div className="text-xs text-muted-foreground flex-1 text-right truncate">{row.note}</div>
+      )}
+    </div>
+  );
+}
+
 function AgentflowAskCard({
   question,
   answer,
@@ -1624,6 +1728,8 @@ function AgentflowAskCard({
   warning: string | null;
   onDismiss: () => void;
 }) {
+  const formatted = parseAgentflowAnswer(answer);
+
   return (
     <div className="mt-3 rounded-lg border border-[hsl(var(--accent-blue)/0.3)] bg-[hsl(var(--accent-blue)/0.05)] p-4 shadow-sm relative animate-in fade-in slide-in-from-top-2 duration-300">
       <button
@@ -1642,11 +1748,32 @@ function AgentflowAskCard({
               {question}
             </div>
           )}
-          <div className="whitespace-pre-wrap text-sm text-foreground leading-relaxed">
-            {answer}
-          </div>
+          {formatted.summary && (
+            <p className="text-sm text-foreground leading-relaxed">
+              {renderAgentflowMarkdown(formatted.summary)}
+            </p>
+          )}
         </div>
       </div>
+      {formatted.topResults.length > 0 && (
+        <div className="mt-3 ml-6">
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">
+            Top results
+          </div>
+          <div className="rounded-md border border-border bg-background/60 divide-y divide-border">
+            {formatted.topResults.map((row, i) => (
+              renderAgentflowTopResult(row, i)
+            ))}
+          </div>
+        </div>
+      )}
+      {formatted.remainder.length > 0 && (
+        <div className="mt-3 ml-6 space-y-1 text-sm text-muted-foreground">
+          {formatted.remainder.map((line, i) => (
+            <p key={i}>{renderAgentflowMarkdown(line)}</p>
+          ))}
+        </div>
+      )}
       <div className="mt-3 ml-6 flex gap-2 flex-wrap items-center text-[12px] text-muted-foreground">
         {agentflowMeta?.sessionId && (
           <span className="rounded-full border border-border bg-background/60 px-2 py-0.5">
