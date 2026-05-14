@@ -16,7 +16,6 @@ import {
   useStrategyListsStore,
 } from '@/services';
 import type { StrategyList } from '@/services';
-import { askAgentflow, type AgentflowAskMeta } from '@/services/agentflow';
 import { usePersona } from '@/stores/personaStore';
 import { TopNav } from '@/components/TopNav';
 import { Button } from '@/components/ui/button';
@@ -426,10 +425,6 @@ export default function Explore() {
   // Ask Prism
   const [askInput, setAskInput] = useState('');
   const [askMatch, setAskMatch] = useState<AskPrismQuestion | null>(null);
-  const [askQuestion, setAskQuestion] = useState('');
-  const [askAgentflowText, setAskAgentflowText] = useState('');
-  const [askAgentflowMeta, setAskAgentflowMeta] = useState<AgentflowAskMeta | null>(null);
-  const [askAgentflowError, setAskAgentflowError] = useState<string | null>(null);
   const [askMeta, setAskMeta] = useState<{
     fromCache: boolean;
     responseTime: number;
@@ -744,86 +739,50 @@ export default function Explore() {
     setVisibleColumns((vc) => (vc.includes(key) ? vc.filter((k) => k !== key) : [...vc, key]));
   };
 
-  // Ask Prism — creates a fresh Agentflow session per question, then streams
-  // the response through the Vercel API proxy. The old demo matcher remains as
-  // a fallback when the API is unavailable.
-  const submitAsk = async (text?: string) => {
+  // Ask Prism — checks cache first, simulates LLM latency on miss.
+  const submitAsk = (text?: string) => {
     const q = (text ?? askInput).trim();
     if (!q) return;
 
-    const startedAt = performance.now();
-    setAskQuestion(q);
+    // 1. Cache lookup
+    const cached = servicesCache.get(q);
+    if (cached) {
+      const responseTime = 12 + Math.floor(Math.random() * 34); // 12–45ms
+      // Find the matching question shape (response is what we stored).
+      const match = askPrismService.match(q);
+      if (match) {
+        setAskMatch(match);
+        setAskFallback(false);
+        setAskMeta({ fromCache: true, responseTime, hitCount: cached.hitCount });
+      }
+      return;
+    }
+
+    // 2. Miss — simulate generation
+    const match = askPrismService.match(q);
+    if (!match) {
+      setAskMatch(null);
+      setAskMeta(null);
+      setAskFallback(true);
+      return;
+    }
     setAskLoading(true);
     setAskMatch(null);
     setAskFallback(false);
     setAskMeta(null);
-    setAskAgentflowText('');
-    setAskAgentflowMeta(null);
-    setAskAgentflowError(null);
-
-    try {
-      const result = await askAgentflow(q, {
-        onText: setAskAgentflowText,
-        onMeta: setAskAgentflowMeta,
-      });
-
-      if (!result.text.trim()) {
-        throw new Error('Agentflow returned an empty response');
-      }
-
-      setAskAgentflowMeta({
-        sessionId: result.sessionId,
-        requestId: result.requestId,
-      });
-      setAskMeta({
-        fromCache: false,
-        responseTime: Math.max(1, Math.round(performance.now() - startedAt)),
-        hitCount: 1,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Agentflow request failed';
-      setAskAgentflowError(message);
-
-      const cached = servicesCache.get(q);
-      if (cached) {
-        const match = askPrismService.match(q);
-        if (match) {
-          setAskMatch(match);
-          setAskFallback(false);
-          setAskMeta({ fromCache: true, responseTime: 12, hitCount: cached.hitCount });
-        }
-        return;
-      }
-
-      const match = askPrismService.match(q);
-      if (match) {
-        servicesCache.set(q, match.response);
-        setAskMatch(match);
-        setAskFallback(false);
-        setAskMeta({
-          fromCache: false,
-          responseTime: Math.max(1, Math.round(performance.now() - startedAt)),
-          hitCount: 1,
-        });
-        return;
-      }
-
-      setAskMatch(null);
-      setAskMeta(null);
-      setAskFallback(true);
-    } finally {
+    window.setTimeout(() => {
+      const responseTime = 1100 + Math.floor(Math.random() * 700); // 1100–1800ms
+      servicesCache.set(q, match.response);
       setAskLoading(false);
-    }
+      setAskMatch(match);
+      setAskMeta({ fromCache: false, responseTime, hitCount: 1 });
+    }, 1500);
   };
 
   const dismissAsk = () => {
     setAskMatch(null);
     setAskFallback(false);
     setAskInput('');
-    setAskQuestion('');
-    setAskAgentflowText('');
-    setAskAgentflowMeta(null);
-    setAskAgentflowError(null);
     setAskMeta(null);
     setAskLoading(false);
   };
@@ -1144,23 +1103,11 @@ export default function Explore() {
               {askLoading && (
                 <div className="mt-3 rounded-lg border border-[hsl(var(--accent-blue)/0.3)] bg-[hsl(var(--accent-blue)/0.05)] p-4 shadow-sm flex items-center gap-3 animate-pulse">
                   <Sparkles className="h-4 w-4 text-[hsl(var(--accent-blue))]" />
-                  <span className="text-sm text-muted-foreground">
-                    {askAgentflowText ? 'Streaming Agentflow response...' : 'Creating Agentflow session...'}
-                  </span>
+                  <span className="text-sm text-muted-foreground">Generating response…</span>
                 </div>
               )}
 
               {/* Response card */}
-              {askAgentflowText && (
-                <AgentflowAskCard
-                  question={askQuestion}
-                  answer={askAgentflowText}
-                  meta={askMeta}
-                  agentflowMeta={askAgentflowMeta}
-                  warning={askAgentflowError}
-                  onDismiss={dismissAsk}
-                />
-              )}
               {askMatch && !askLoading && (
                 <AskPrismCard
                   question={askMatch}
@@ -1608,71 +1555,6 @@ export default function Explore() {
 }
 
 // =================== Ask Prism cards ===================
-
-function AgentflowAskCard({
-  question,
-  answer,
-  meta,
-  agentflowMeta,
-  warning,
-  onDismiss,
-}: {
-  question: string;
-  answer: string;
-  meta: { fromCache: boolean; responseTime: number; hitCount: number } | null;
-  agentflowMeta: AgentflowAskMeta | null;
-  warning: string | null;
-  onDismiss: () => void;
-}) {
-  return (
-    <div className="mt-3 rounded-lg border border-[hsl(var(--accent-blue)/0.3)] bg-[hsl(var(--accent-blue)/0.05)] p-4 shadow-sm relative animate-in fade-in slide-in-from-top-2 duration-300">
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="absolute top-2.5 right-2.5 text-muted-foreground hover:text-foreground p-1"
-        aria-label="Dismiss"
-      >
-        <X className="h-4 w-4" />
-      </button>
-      <div className="flex items-start gap-2 pr-6">
-        <Sparkles className="h-4 w-4 text-[hsl(var(--accent-blue))] mt-0.5 shrink-0" />
-        <div className="min-w-0 flex-1">
-          {question && (
-            <div className="mb-2 text-xs font-medium text-muted-foreground">
-              {question}
-            </div>
-          )}
-          <div className="whitespace-pre-wrap text-sm text-foreground leading-relaxed">
-            {answer}
-          </div>
-        </div>
-      </div>
-      <div className="mt-3 ml-6 flex gap-2 flex-wrap items-center text-[12px] text-muted-foreground">
-        {agentflowMeta?.sessionId && (
-          <span className="rounded-full border border-border bg-background/60 px-2 py-0.5">
-            Session {agentflowMeta.sessionId.slice(0, 8)}
-          </span>
-        )}
-        {agentflowMeta?.requestId && (
-          <span className="rounded-full border border-border bg-background/60 px-2 py-0.5">
-            Request {agentflowMeta.requestId.slice(0, 8)}
-          </span>
-        )}
-        {warning && (
-          <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-200">
-            {warning}
-          </span>
-        )}
-        {meta && (
-          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-[#78350F] px-2 py-0.5 font-medium text-[#FED7AA]">
-            <Sparkles className="h-3 w-3" />
-            Agentflow · {meta.responseTime}ms
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function AskPrismCard({
   question,

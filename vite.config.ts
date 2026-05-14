@@ -8,10 +8,6 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
-    watch: {
-      ignored: ["**/node_modules/**", "**/.git/**"],
-      usePolling: true,
-    },
     hmr: {
       overlay: false,
     },
