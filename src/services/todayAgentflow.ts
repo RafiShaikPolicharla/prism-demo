@@ -107,6 +107,7 @@ export const todayAgentflowService = {
   async listTodayActions(): Promise<DemoAction[]> {
     const query = import.meta.env.VITE_TODAY_AGENTFLOW_QUERY || DEFAULT_TODAY_QUERY;
     const result = await askAgentflow(query, {
+      target: 'today',
       onText: () => undefined,
     });
 

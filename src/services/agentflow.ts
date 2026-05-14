@@ -8,6 +8,7 @@ export interface AgentflowAskResult extends AgentflowAskMeta {
 }
 
 interface AskAgentflowOptions {
+  target?: 'ask-prism' | 'today';
   signal?: AbortSignal;
   onText: (text: string) => void;
   onMeta?: (meta: AgentflowAskMeta) => void;
@@ -99,7 +100,7 @@ export async function askAgentflow(
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, target: options.target ?? 'ask-prism' }),
     signal: options.signal,
   });
 

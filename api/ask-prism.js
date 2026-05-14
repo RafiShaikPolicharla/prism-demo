@@ -6,8 +6,15 @@ export default async function handler(req, res) {
   }
 
   try {
-    const baseUrl = process.env.AGENTFLOW_API_BASE_URL;
-    const apiKey = process.env.AGENTFLOW_API_KEY;
+    const target = req.body?.target === 'today' ? 'today' : 'ask-prism';
+    const baseUrl =
+      target === 'today'
+        ? process.env.TODAY_AGENTFLOW_API_BASE_URL || process.env.VITE_TODAY_AGENTFLOW_API_BASE_URL || process.env.AGENTFLOW_API_BASE_URL || process.env.VITE_AGENTFLOW_API_BASE_URL
+        : process.env.ASK_PRISM_AGENTFLOW_API_BASE_URL || process.env.VITE_ASK_PRISM_AGENTFLOW_API_BASE_URL || process.env.AGENTFLOW_API_BASE_URL || process.env.VITE_AGENTFLOW_API_BASE_URL;
+    const apiKey =
+      target === 'today'
+        ? process.env.TODAY_AGENTFLOW_API_KEY || process.env.VITE_TODAY_AGENTFLOW_API_KEY || process.env.AGENTFLOW_API_KEY || process.env.VITE_AGENTFLOW_API_KEY
+        : process.env.ASK_PRISM_AGENTFLOW_API_KEY || process.env.VITE_ASK_PRISM_AGENTFLOW_API_KEY || process.env.AGENTFLOW_API_KEY || process.env.VITE_AGENTFLOW_API_KEY;
     const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
 
     if (!baseUrl || !apiKey) {
@@ -27,7 +34,7 @@ export default async function handler(req, res) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        session_name: `Prism Ask - ${new Date().toISOString()}`,
+        session_name: `Prism ${target} - ${new Date().toISOString()}`,
       }),
     });
 
