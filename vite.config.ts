@@ -38,9 +38,16 @@ function agentflowDevProxy(env: Record<string, string>): Plugin {
         }
 
         try {
-          const baseUrl = env.AGENTFLOW_API_BASE_URL || env.VITE_AGENTFLOW_API_BASE_URL;
-          const apiKey = env.AGENTFLOW_API_KEY || env.VITE_AGENTFLOW_API_KEY;
           const body = await readJsonBody(req);
+          const target = body.target === "today" ? "today" : "ask-prism";
+          const baseUrl =
+            target === "today"
+              ? env.TODAY_AGENTFLOW_API_BASE_URL || env.VITE_TODAY_AGENTFLOW_API_BASE_URL || env.AGENTFLOW_API_BASE_URL || env.VITE_AGENTFLOW_API_BASE_URL
+              : env.ASK_PRISM_AGENTFLOW_API_BASE_URL || env.VITE_ASK_PRISM_AGENTFLOW_API_BASE_URL || env.AGENTFLOW_API_BASE_URL || env.VITE_AGENTFLOW_API_BASE_URL;
+          const apiKey =
+            target === "today"
+              ? env.TODAY_AGENTFLOW_API_KEY || env.VITE_TODAY_AGENTFLOW_API_KEY || env.AGENTFLOW_API_KEY || env.VITE_AGENTFLOW_API_KEY
+              : env.ASK_PRISM_AGENTFLOW_API_KEY || env.VITE_ASK_PRISM_AGENTFLOW_API_KEY || env.AGENTFLOW_API_KEY || env.VITE_AGENTFLOW_API_KEY;
           const query = typeof body.query === "string" ? body.query.trim() : "";
 
           if (!baseUrl || !apiKey) {
@@ -62,7 +69,7 @@ function agentflowDevProxy(env: Record<string, string>): Plugin {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              session_name: `Prism Ask - ${new Date().toISOString()}`,
+              session_name: `Prism ${target} - ${new Date().toISOString()}`,
             }),
           });
 
