@@ -11,7 +11,7 @@ import {
   type TodayFilters,
 } from '@/services';
 import { getHouseholdCountByTheme } from '@/services/households';
-import { todayAgentflowService } from '@/services/todayAgentflow';
+import { type AgentDashboardSummary, todayAgentflowService } from '@/services/todayAgentflow';
 import { usePersona } from '@/stores/personaStore';
 import { PersonaSwitcher } from '@/components/today/PersonaSwitcher';
 import { ActionCard } from '@/components/today/ActionCard';
@@ -20,7 +20,7 @@ import { TopNav } from '@/components/TopNav';
 import { Button } from '@/components/ui/button';
 import { contentService } from '@/services';
 import { cn } from '@/lib/utils';
-import { Loader2, X } from 'lucide-react';
+import { Loader2, RefreshCw, X } from 'lucide-react';
 import type { DemoAction, DemoHousehold } from '@/types/demo';
 
 function greetingFor(date = new Date()) {
@@ -54,8 +54,11 @@ export default function Today() {
   const themes = useMemo(() => contentService.themes(), []);
   const [households, setHouseholds] = useState<Map<string, DemoHousehold>>(new Map());
   const [agentActions, setAgentActions] = useState<DemoAction[] | null>(null);
+  const [agentSummary, setAgentSummary] = useState<AgentDashboardSummary | null>(null);
   const [agentActionsLoading, setAgentActionsLoading] = useState(false);
   const [agentActionsError, setAgentActionsError] = useState<string | null>(null);
+  const [agentCachedAt, setAgentCachedAt] = useState<number | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
 
   // Filters now live in PersonaProvider so they survive Today → drill-down →
   // Today round-trips. PersonaProvider resets them on persona switch.
@@ -74,13 +77,17 @@ export default function Today() {
   useEffect(() => {
     let alive = true;
     setAgentActions(null);
+    setAgentSummary(null);
+    setAgentCachedAt(null);
     setAgentActionsError(null);
 
     setAgentActionsLoading(true);
     todayAgentflowService
-      .listTodayActions()
-      .then((actions) => {
+      .getTodayDashboard(personaId, { forceRefresh: refreshTick > 0 })
+      .then(({ actions, summary, cachedAt }) => {
         if (!alive) return;
+        setAgentSummary(summary);
+        setAgentCachedAt(cachedAt ?? Date.now());
         if (actions.length > 0) {
           setAgentActions(actions);
         } else {
@@ -100,7 +107,7 @@ export default function Today() {
     return () => {
       alive = false;
     };
-  }, [personaId]);
+  }, [personaId, refreshTick]);
 
   const metaByHouseholdId = useMemo(() => {
     const m = new Map<string, HouseholdMeta>();
@@ -120,6 +127,15 @@ export default function Today() {
   // reconcile. AUM reviewed = sum(hhValue where isReviewed === true).
   const bookAum = useMemo(() => {
     if (personaId !== 'senior' || !persona.bookHealth) return undefined;
+    if (agentSummary?.totalAum != null) {
+      const reviewedPct = Math.max(0, Math.min(100, Math.round(agentSummary.reviewedPct ?? 0)));
+      return {
+        total: agentSummary.totalAum,
+        highlighted: Math.round(agentSummary.totalAum * (reviewedPct / 100)),
+        highlightedPct: reviewedPct,
+        outside: 0,
+      };
+    }
     const all = Array.from(households.values());
     if (all.length === 0) return undefined;
     const total = all.reduce((s, h) => s + (h.hhValue || 0), 0);
@@ -136,7 +152,7 @@ export default function Today() {
       highlightedPct: total > 0 ? Math.round((reviewed / total) * 100) : 0,
       outside,
     };
-  }, [personaId, persona, households]);
+  }, [personaId, persona, households, agentSummary]);
 
   // Reviewed household count (canonical, from isReviewed).
   const reviewedCount = useMemo(() => {
@@ -191,9 +207,13 @@ export default function Today() {
     const next = { ...persona };
     if (persona.bookHealth) {
       const bh = { ...persona.bookHealth };
-      if (gapsByTheme) bh.gapsByTheme = gapsByTheme;
+      if (agentSummary?.gapsByTheme) bh.gapsByTheme = agentSummary.gapsByTheme;
+      else if (gapsByTheme) bh.gapsByTheme = gapsByTheme;
+      if (agentSummary?.reviewedPct != null) {
+        bh.householdsReviewed = Math.round((Math.max(0, Math.min(100, agentSummary.reviewedPct)) / 100) * bh.reviewedTarget);
+      }
       if (shareOfWallet) bh.shareOfWallet = shareOfWallet;
-      if (reviewedCount != null && reviewedCount > 0) bh.householdsReviewed = reviewedCount;
+      if (agentSummary?.reviewedPct == null && reviewedCount != null && reviewedCount > 0) bh.householdsReviewed = reviewedCount;
       next.bookHealth = bh;
     }
     // Acquired: derive transitioned-household contacted ratio from the
@@ -213,7 +233,7 @@ export default function Today() {
       }
     }
     return next;
-  }, [persona, personaId, gapsByTheme, shareOfWallet, reviewedCount, households]);
+  }, [persona, personaId, gapsByTheme, shareOfWallet, reviewedCount, households, agentSummary]);
 
   // Acquired persona: AUM rollups across the 25 Recently Transitioned
   // households. "Contacted" is sourced from the Newly Transitioned Outreach
@@ -322,6 +342,11 @@ export default function Today() {
     navigate(`/explore${params.toString() ? `?${params}` : ''}`);
   };
 
+  const refreshAgentflow = () => {
+    todayAgentflowService.clearCache(personaId);
+    setRefreshTick((n) => n + 1);
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <TopNav />
@@ -404,21 +429,35 @@ export default function Today() {
               <h2 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80">
                 Today's Priorities
               </h2>
-              {agentActionsLoading && (
-                <span className="text-[11px] text-muted-foreground">
-                  Loading Agentflow recommendations...
-                </span>
-              )}
-              {!agentActionsLoading && agentActions && (
-                <span className="text-[11px] text-[hsl(var(--accent-blue))]">
-                  Agentflow recommendations
-                </span>
-              )}
-              {!agentActionsLoading && agentActionsError && (
-                <span className="text-[11px] text-muted-foreground">
-                  Agentflow unavailable, showing demo priorities
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                {agentActionsLoading && (
+                  <span className="text-[11px] text-muted-foreground">
+                    Loading Agentflow recommendations...
+                  </span>
+                )}
+                {!agentActionsLoading && agentActions && (
+                  <span className="text-[11px] text-[hsl(var(--accent-blue))]">
+                    Agentflow recommendations
+                    {agentCachedAt ? ` · synced ${new Date(agentCachedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                  </span>
+                )}
+                {!agentActionsLoading && agentActionsError && (
+                  <span className="text-[11px] text-muted-foreground">
+                    Agentflow unavailable, showing demo priorities
+                  </span>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={refreshAgentflow}
+                  disabled={agentActionsLoading}
+                >
+                  <RefreshCw className={cn('h-3.5 w-3.5', agentActionsLoading && 'animate-spin')} />
+                  Refresh
+                </Button>
+              </div>
             </div>
 
             {activeChips.length > 0 && (
@@ -514,19 +553,60 @@ export default function Today() {
           </main>
 
           <aside>
-            <ContextPanel
-              persona={personaForPanel}
-              bookAum={bookAum}
-              inheritedAum={inheritedAum}
-              pushedMoments={personaId === 'junior' || personaId === 'acquired' ? pushedCoachableMoments[personaId] : undefined}
-              onWealthSegmentClick={(id) => navigate(`/explore?wealthSegment=${id}&sourceAum=1`)}
-              onThemeClick={(label) => navigate(`/explore?theme=${encodeURIComponent(label)}`)}
-              onReviewCoverageClick={() => navigate(`/explore?reviewStatus=reviewed&sourceAum=1`)}
-              onRetentionRiskClick={() =>
-                navigate(`/explore?tags=${encodeURIComponent('Flight Risk,Recently Transitioned')}`)
-              }
-            />
+            {agentActionsLoading ? (
+              <ContextPanelSkeleton />
+            ) : (
+              <ContextPanel
+                persona={personaForPanel}
+                bookAum={bookAum}
+                inheritedAum={inheritedAum}
+                pushedMoments={personaId === 'junior' || personaId === 'acquired' ? pushedCoachableMoments[personaId] : undefined}
+                onWealthSegmentClick={(id) => navigate(`/explore?wealthSegment=${id}&sourceAum=1`)}
+                onThemeClick={(label) => navigate(`/explore?theme=${encodeURIComponent(label)}`)}
+                onReviewCoverageClick={() => navigate(`/explore?reviewStatus=reviewed&sourceAum=1`)}
+                onRetentionRiskClick={() =>
+                  navigate(`/explore?tags=${encodeURIComponent('Flight Risk,Recently Transitioned')}`)
+                }
+              />
+            )}
           </aside>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ContextPanelSkeleton() {
+  return (
+    <div className="space-y-3">
+      <PaneHeader title="Book Health" subtitle="Loading Agentflow summary" />
+      <div className="rounded-lg border border-border bg-card p-5 animate-pulse space-y-5">
+        <div className="space-y-2">
+          <div className="h-3 w-20 rounded bg-muted/80" />
+          <div className="h-7 w-28 rounded bg-muted" />
+          <div className="h-3 w-36 rounded bg-muted/70" />
+        </div>
+        <div className="space-y-2">
+          <div className="flex justify-between">
+            <div className="h-4 w-32 rounded bg-muted/80" />
+            <div className="h-4 w-12 rounded bg-muted/80" />
+          </div>
+          <div className="h-2 w-full rounded-full bg-muted" />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="h-20 rounded-md bg-muted/70" />
+          ))}
+        </div>
+        <div className="space-y-2">
+          <div className="h-3 w-28 rounded bg-muted/80" />
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="flex items-center gap-2">
+              <div className="h-3 w-24 rounded bg-muted/80" />
+              <div className="h-2 flex-1 rounded bg-muted" />
+              <div className="h-3 w-6 rounded bg-muted/80" />
+            </div>
+          ))}
         </div>
       </div>
     </div>

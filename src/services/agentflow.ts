@@ -9,6 +9,7 @@ export interface AgentflowAskResult extends AgentflowAskMeta {
 
 interface AskAgentflowOptions {
   target?: 'ask-prism' | 'today';
+  nodeNameIncludes?: string[];
   signal?: AbortSignal;
   onText: (text: string) => void;
   onMeta?: (meta: AgentflowAskMeta) => void;
@@ -64,7 +65,7 @@ function readMeta(
 function readEvent(
   raw: string,
   onMeta?: (meta: AgentflowAskMeta) => void,
-): { text: string; isLastNode: boolean; meta: AgentflowAskMeta } | null {
+): { text: string; isLastNode: boolean; nodeNames: string[]; meta: AgentflowAskMeta } | null {
   const parsed = parseSseEvent(raw);
   if (!parsed || typeof parsed !== 'object') return null;
 
@@ -75,11 +76,16 @@ function readEvent(
   }
 
   const meta = readMeta(event, onMeta);
+  const response = event.response && typeof event.response === 'object'
+    ? (event.response as Record<string, unknown>)
+    : null;
+  const nodeNames = response ? Object.keys(response) : [];
   const parts = extractText(event.response);
   if (parts.length === 0) {
     return {
       text: '',
       isLastNode: event.last_node === true,
+      nodeNames,
       meta,
     };
   }
@@ -87,8 +93,17 @@ function readEvent(
   return {
     text: parts[parts.length - 1],
     isLastNode: event.last_node === true,
+    nodeNames,
     meta,
   };
+}
+
+function nodeMatches(nodeNames: string[], targets: string[] | undefined): boolean {
+  if (!targets || targets.length === 0) return false;
+  return nodeNames.some((nodeName) => {
+    const normalizedNode = nodeName.toLowerCase().replace(/[_-]+/g, ' ');
+    return targets.some((target) => normalizedNode.includes(target.toLowerCase()));
+  });
 }
 
 export async function askAgentflow(
@@ -114,6 +129,7 @@ export async function askAgentflow(
   let buffer = '';
   let text = '';
   let lastNodeText = '';
+  let matchedNodeText = '';
   const meta: AgentflowAskMeta = {};
 
   while (true) {
@@ -129,6 +145,9 @@ export async function askAgentflow(
         options.onMeta?.({ ...meta });
       });
       if (parsedEvent?.text) text = parsedEvent.text;
+      if (parsedEvent?.text && nodeMatches(parsedEvent.nodeNames, options.nodeNameIncludes)) {
+        matchedNodeText = parsedEvent.text;
+      }
       if (parsedEvent?.isLastNode && parsedEvent.text) lastNodeText = parsedEvent.text;
     }
 
@@ -141,10 +160,13 @@ export async function askAgentflow(
       options.onMeta?.({ ...meta });
     });
     if (parsedEvent?.text) text = parsedEvent.text;
+    if (parsedEvent?.text && nodeMatches(parsedEvent.nodeNames, options.nodeNameIncludes)) {
+      matchedNodeText = parsedEvent.text;
+    }
     if (parsedEvent?.isLastNode && parsedEvent.text) lastNodeText = parsedEvent.text;
   }
 
-  text = lastNodeText || text;
+  text = matchedNodeText || lastNodeText || text;
   if (text) options.onText(text);
   return { text, ...meta };
 }

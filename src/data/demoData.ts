@@ -1010,10 +1010,11 @@ export const ASK_PRISM_QUESTIONS: AskPrismQuestion[] = [
 export const ASK_PRISM_FALLBACK: AskPrismFallback = {
   message: "I'm still learning what to look for in your book. Try one of these to start:",
   suggestions: [
-    "Show me clients turning 65 next year with no annuity",
-    "Which of my high-value households haven't I contacted recently?",
-    "Where are my biggest rollover opportunities?",
-    "Which families with young children don't have life insurance?"
+    "Show me clients with a household income over $150k who do not participate in online trading",
+    "Which families with kids have no life coverage?",
+    "Show me clients turning 65 with no annuity",
+    "Who are our top 10 clients by Total Account Value?",
+    "List few clients who are currently renters"
   ]
 };
 

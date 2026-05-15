@@ -118,7 +118,7 @@ export default function Opportunity() {
     if (action.householdId.startsWith('agent_household_')) {
       setHousehold({
         id: action.householdId,
-        name: `${action.clientName} household`,
+        name: action.agentHousehold?.name ?? `${action.clientName} household`,
         primaryContact: action.clientName,
         members: [
           {
@@ -135,12 +135,12 @@ export default function Opportunity() {
         triggerLabels: [action.trigger],
         wealthSegment: 'Agentflow recommendation',
         primaryWealthSegment: 'Develop',
-        assetSegment: action.estimatedValue,
+        assetSegment: action.agentHousehold?.assetSegment ?? action.estimatedValue,
         lastContact: '',
-        tags: [],
-        products: ['Agentflow recommendation'],
-        notes: action.whyItFired,
-        salesforceTier: 'B',
+        tags: action.agentHousehold?.tags ?? [],
+        products: action.agentHousehold?.products ?? ['Agentflow recommendation'],
+        notes: action.agentHousehold?.notes ?? action.whyItFired,
+        salesforceTier: action.agentHousehold?.tier ?? 'B',
       });
       setPotentials([]);
       return () => {

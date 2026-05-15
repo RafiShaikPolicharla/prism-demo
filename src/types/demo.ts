@@ -194,6 +194,14 @@ export interface DemoAction {
   talkTrack: string[];
   actions: ActionButton[];
   coachingNote?: string;
+  agentHousehold?: {
+    name: string;
+    tier: SalesforceTier;
+    notes: string;
+    tags: Tag[];
+    assetSegment: string;
+    products: string[];
+  };
 }
 
 // ============================ THEME ============================
