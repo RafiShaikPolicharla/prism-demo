@@ -396,10 +396,11 @@ function renderSummary(text: string) {
 }
 
 const ASK_PRISM_SUGGESTIONS = [
-  'Where are my biggest rollover opportunities?',
+  'Show me clients with a household income over $150k who do not participate in online trading',
   'Which families with kids have no life coverage?',
   'Show me clients turning 65 with no annuity',
-  "High-value households I haven't contacted recently",
+  'Who are our top 10 clients by Total Account Value?',
+  'List few clients who are currently renters',
 ];
 
 // =================== component ===================

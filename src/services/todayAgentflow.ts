@@ -1,8 +1,12 @@
 import { askAgentflow } from './agentflow';
 import { registerAgentActions } from './opportunities';
-import type { DemoAction, Urgency } from '@/types/demo';
+import type { DemoAction, PersonaId, SalesforceTier, Tag, Urgency } from '@/types/demo';
 
-const DEFAULT_TODAY_QUERY = 'What investment plans can be recommended for C020';
+const DEFAULT_TODAY_QUERY_BY_PERSONA: Record<PersonaId, string> = {
+  senior: 'Sync the dashboard for Patricia',
+  junior: 'Sync the dashboard for Marcus',
+  acquired: 'Sync the dashboard for Jordan',
+};
 
 interface AgentTodayRecommendation {
   customer_name?: string;
@@ -13,21 +17,52 @@ interface AgentTodayRecommendation {
   detailed_description?: string;
 }
 
-function unwrapResponse(raw: string): string {
+interface AgentDashboardPriority {
+  id?: string;
+  householdName?: string;
+  tier?: SalesforceTier;
+  urgency?: Urgency;
+  category?: string;
+  title?: string;
+  rationale?: string;
+  estimatedValue?: string;
+  pushDraft?: string;
+}
+
+export interface AgentDashboardSummary {
+  totalAum?: number;
+  reviewedPct?: number;
+  gapsByTheme?: Record<string, number>;
+}
+
+export interface TodayAgentflowResult {
+  actions: DemoAction[];
+  summary: AgentDashboardSummary | null;
+  cached?: boolean;
+  cachedAt?: number;
+}
+
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const cache = new Map<PersonaId, { result: TodayAgentflowResult; cachedAt: number }>();
+
+function unwrapField(raw: string, keys: string[]): string {
   const trimmed = raw.trim();
 
   try {
     const parsed = JSON.parse(trimmed);
-    if (typeof parsed?.response === 'string') return parsed.response;
+    for (const key of keys) {
+      if (typeof parsed?.[key] === 'string') return parsed[key];
+    }
     return trimmed;
   } catch {
     // Continue to Python-dict style wrapper support.
   }
 
-  const match = trimmed.match(/^\{\s*['"]response['"]\s*:\s*(['"])([\s\S]*)\1\s*\}$/);
+  const keyPattern = keys.map((key) => key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const match = trimmed.match(new RegExp(`^\\{\\s*['"](${keyPattern})['"]\\s*:\\s*(['"])([\\s\\S]*)\\2\\s*\\}$`));
   if (!match) return trimmed;
 
-  return match[2]
+  return match[3]
     .replace(/\\"/g, '"')
     .replace(/\\'/g, "'")
     .replace(/\\n(?=\s*[\[{])/g, '')
@@ -37,16 +72,13 @@ function unwrapResponse(raw: string): string {
     .trim();
 }
 
-function parseRecommendations(raw: string): AgentTodayRecommendation[] {
-  const unwrapped = unwrapResponse(raw);
+function parseJsonPayload(raw: string): unknown {
+  const unwrapped = unwrapField(raw, ['dashboard_data', 'response']);
 
   try {
-    const parsed = JSON.parse(unwrapped);
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed && typeof parsed === 'object') return [parsed as AgentTodayRecommendation];
-    return [];
+    return JSON.parse(unwrapped);
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -75,7 +107,56 @@ function extractNextStep(text: string | undefined): string {
   return nextActions || fallback;
 }
 
-function toDemoAction(item: AgentTodayRecommendation, index: number): DemoAction {
+function householdIdFromPriorityId(id: string | undefined, index: number): string {
+  const householdNumber = id?.match(/\d+/)?.[0];
+  return householdNumber ? `hh_${householdNumber}` : `agent_household_${index}`;
+}
+
+function ageFromPriority(item: AgentDashboardPriority): number | null {
+  const age = item.rationale?.match(/Client\s*\((\d+)\)/i)?.[1];
+  if (!age) return null;
+  const n = Number.parseInt(age, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toDemoActionFromPriority(item: AgentDashboardPriority, index: number): DemoAction {
+  const householdName = item.householdName?.trim() || `Household ${index + 1}`;
+  const title = item.title?.trim() || item.category?.trim() || 'Agentflow priority';
+  const rationale = item.rationale?.trim() || 'Agentflow identified a priority for this household.';
+  const pushDraft = item.pushDraft?.trim() || 'Advisor follow-up';
+
+  return {
+    id: `agent_today_${item.id ?? index}`,
+    householdId: `agent_household_${item.id ?? index}`,
+    clientName: `${householdName} family`,
+    clientAge: ageFromPriority(item),
+    category: item.category?.trim() || title,
+    theme: item.category?.trim() || 'Growth',
+    urgency: item.urgency ?? 'monitor',
+    estimatedValue: item.estimatedValue?.trim() || 'Review required',
+    deadline: null,
+    whyItFired: rationale,
+    trigger: title,
+    impact: rationale,
+    suggestedNextStep: `Prepare ${pushDraft} outreach for the ${householdName} family.`,
+    talkTrack: [
+      rationale,
+      `Recommended playbook: ${pushDraft}.`,
+    ],
+    actions: ['create_task', 'schedule_meeting', 'draft_email'],
+    coachingNote: `Use the ${pushDraft} playbook and validate next steps before client outreach.`,
+    agentHousehold: {
+      name: `${householdName} family`,
+      tier: item.tier ?? 'B',
+      notes: rationale,
+      tags: item.category === 'Retention' ? ['Flight Risk'] as Tag[] : [],
+      assetSegment: item.estimatedValue?.trim() || 'Agentflow priority',
+      products: [pushDraft],
+    },
+  };
+}
+
+function toDemoActionFromRecommendation(item: AgentTodayRecommendation, index: number): DemoAction {
   const clientName = item.customer_name?.trim() || `Recommended client ${index + 1}`;
   const age = Number.parseInt(String(item.age ?? ''), 10);
   const riskProfile = item.risk_profile?.trim() || 'Investment Recommendation';
@@ -104,16 +185,55 @@ function toDemoAction(item: AgentTodayRecommendation, index: number): DemoAction
 }
 
 export const todayAgentflowService = {
-  async listTodayActions(): Promise<DemoAction[]> {
-    const query = import.meta.env.VITE_TODAY_AGENTFLOW_QUERY || DEFAULT_TODAY_QUERY;
+  async getTodayDashboard(personaId: PersonaId, options?: { forceRefresh?: boolean }): Promise<TodayAgentflowResult> {
+    const cached = cache.get(personaId);
+    if (!options?.forceRefresh && cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+      registerAgentActions(cached.result.actions);
+      return { ...cached.result, cached: true, cachedAt: cached.cachedAt };
+    }
+
+    const query =
+      personaId === 'senior'
+        ? import.meta.env.VITE_TODAY_PATRICIA_QUERY || import.meta.env.VITE_TODAY_AGENTFLOW_QUERY || DEFAULT_TODAY_QUERY_BY_PERSONA.senior
+        : personaId === 'junior'
+          ? import.meta.env.VITE_TODAY_MARCUS_QUERY || import.meta.env.VITE_TODAY_AGENTFLOW_QUERY || DEFAULT_TODAY_QUERY_BY_PERSONA.junior
+          : import.meta.env.VITE_TODAY_JORDAN_QUERY || import.meta.env.VITE_TODAY_AGENTFLOW_QUERY || DEFAULT_TODAY_QUERY_BY_PERSONA.acquired;
     const result = await askAgentflow(query, {
       target: 'today',
+      nodeNameIncludes: ['parse sql'],
       onText: () => undefined,
     });
 
-    const recommendations = parseRecommendations(result.text);
-    const actions = recommendations.map(toDemoAction);
+    const payload = parseJsonPayload(result.text);
+    const priorities =
+      payload && typeof payload === 'object' && Array.isArray((payload as { priorities?: unknown }).priorities)
+        ? (payload as { priorities: AgentDashboardPriority[] }).priorities
+        : null;
+    const summary =
+      payload && typeof payload === 'object' && (payload as { summary?: unknown }).summary && typeof (payload as { summary?: unknown }).summary === 'object'
+        ? (payload as { summary: AgentDashboardSummary }).summary
+        : null;
+    const recommendations = Array.isArray(payload)
+      ? payload as AgentTodayRecommendation[]
+      : payload && typeof payload === 'object' && !priorities
+        ? [payload as AgentTodayRecommendation]
+        : [];
+    const actions = priorities
+      ? priorities.map(toDemoActionFromPriority)
+      : recommendations.map(toDemoActionFromRecommendation);
+    const dashboardResult = { actions, summary };
+    cache.set(personaId, { result: dashboardResult, cachedAt: Date.now() });
     registerAgentActions(actions);
-    return actions;
+    return dashboardResult;
+  },
+
+  async listTodayActions(personaId: PersonaId): Promise<DemoAction[]> {
+    const result = await this.getTodayDashboard(personaId);
+    return result.actions;
+  },
+
+  clearCache(personaId?: PersonaId): void {
+    if (personaId) cache.delete(personaId);
+    else cache.clear();
   },
 };
